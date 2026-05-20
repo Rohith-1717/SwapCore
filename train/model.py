@@ -1,7 +1,6 @@
 from typing import Any
 
 import flax.linen as nn
-import jax
 import jax.numpy as jnp
 
 
@@ -24,12 +23,19 @@ class GRUCell(nn.Module):
 
 
 class GRUModel(nn.Module):
-    hidden_size: int = 16
+    hidden_size: int = 32
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        if x.ndim != 3:
+            raise ValueError(f"GRUModel expects (batch, seq_len, features), got {x.shape}")
+
         batch_size = x.shape[0]
         carry = jnp.zeros((batch_size, self.hidden_size))
-        carry, output = GRUCell(self.hidden_size, name='gru_cell')(carry, x)
-        logits = nn.Dense(1, name='output_dense')(output)
-        return nn.sigmoid(logits).squeeze(-1)
+        cell = GRUCell(self.hidden_size, name='gru_cell')
+
+        for timestep in range(x.shape[1]):
+            carry, _ = cell(carry, x[:, timestep, :])
+
+        logits = nn.Dense(1, name='output_dense')(carry)
+        return logits.squeeze(-1)

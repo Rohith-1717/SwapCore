@@ -3,7 +3,7 @@
 #include <cstddef>
 
 constexpr size_t GRU_INPUT_SIZE = 5;
-constexpr size_t GRU_HIDDEN_SIZE = 16;
+constexpr size_t GRU_HIDDEN_SIZE = 32;
 constexpr size_t GRU_OUTPUT_SIZE = 1;
 
 static const float GRU_WIR[GRU_HIDDEN_SIZE * GRU_INPUT_SIZE] = {0.0f};

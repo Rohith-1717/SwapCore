@@ -13,14 +13,22 @@ def _transpose_and_flatten(matrix):
 
 
 def export_c_header(params, output_path: str):
-    input_size = 5
-    hidden_size = 16
+    if 'params' in params:
+        params = params['params']
+
     gate_kernel = params['gru_cell']['gates']['kernel']
     candidate_kernel = params['gru_cell']['candidate']['kernel']
     gate_bias = params['gru_cell']['gates']['bias']
     candidate_bias = params['gru_cell']['candidate']['bias']
     output_kernel = params['output_dense']['kernel']
     output_bias = params['output_dense']['bias']
+
+    hidden_size = output_kernel.shape[0]
+    input_size = gate_kernel.shape[0] - hidden_size
+    if gate_kernel.shape != (input_size + hidden_size, 2 * hidden_size):
+        raise ValueError(f"unexpected gate kernel shape: {gate_kernel.shape}")
+    if candidate_kernel.shape != (input_size + hidden_size, hidden_size):
+        raise ValueError(f"unexpected candidate kernel shape: {candidate_kernel.shape}")
 
     wir = _transpose_and_flatten(gate_kernel[:input_size, :hidden_size])
     wiz = _transpose_and_flatten(gate_kernel[:input_size, hidden_size:2 * hidden_size])
@@ -56,8 +64,8 @@ def export_c_header(params, output_path: str):
     with path.open('w', encoding='utf-8') as handle:
         handle.write('#pragma once\n')
         handle.write('#include <cstddef>\n\n')
-        handle.write('constexpr size_t GRU_INPUT_SIZE = 5;\n')
-        handle.write('constexpr size_t GRU_HIDDEN_SIZE = 16;\n')
+        handle.write(f'constexpr size_t GRU_INPUT_SIZE = {input_size};\n')
+        handle.write(f'constexpr size_t GRU_HIDDEN_SIZE = {hidden_size};\n')
         handle.write('constexpr size_t GRU_OUTPUT_SIZE = 1;\n\n')
         for name, values in weights.items():
             size = len(values)
