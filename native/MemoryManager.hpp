@@ -4,7 +4,9 @@
 #include "PageTable.hpp"
 #include "SwapManager.hpp"
 #include "EvictionManager.hpp"
-#include "RuntimeGRU.hpp"
+#include "runtime_gru.hpp"
+#include <array>
+#include <deque>
 #include <vector>
 #include <queue>
 #include <chrono>
@@ -25,6 +27,8 @@ public:
     uint64_t faultLatencyNs() const;
     uint64_t swapWriteLatencyNs() const;
     uint64_t swapReadLatencyNs() const;
+    uint64_t learnedEvictionCount() const;
+    bool learnedEvictionActive() const;
 
 private:
     u64 chooseLearnedVictim();
@@ -40,7 +44,9 @@ private:
     float learnedFrequencyWeight;
     float learnedPredictionWeight;
     u64 accessCounter;
+    uint64_t learnedEvictions;
     uint64_t faultNs;
     uint64_t swapWriteNs;
     uint64_t swapReadNs;
+    std::deque<std::array<float, RuntimeGRU::INPUT_SIZE>> gruHistory;
 };

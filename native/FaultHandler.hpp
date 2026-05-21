@@ -4,7 +4,7 @@
 #include "MemoryManager.hpp"
 #include <vector>
 #include <thread>
-#include <sys/userfaultfd.h>
+#include <linux/userfaultfd.h>
 
 class FaultHandler{
 public:

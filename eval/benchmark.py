@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "native" / "build"))
 
 from collect.tracer import (
     WRITE,
@@ -86,13 +87,16 @@ def simulate_policy(trace: Dict[str, np.ndarray], frames: int, policy: str, work
     start = time.perf_counter()
     vpns = trace["vpn"]
     access_types = trace["access"] if "access" in trace else trace["access_type"]
-    future_positions = build_future_positions(vpns) if policy == "learned" else None
+    learned_state = LearnedRuntimeState() if policy == "learned" else None
 
     for index, raw_vpn in enumerate(vpns):
         vpn = int(raw_vpn)
         is_write = int(access_types[index]) == WRITE
-        if future_positions is not None:
-            future_positions[vpn].popleft()
+        if learned_state is not None:
+            ts = int(trace["ts"][index]) if "ts" in trace else index
+            delta = int(trace["delta"][index]) if "delta" in trace else 0
+            phase = int(trace["phase"][index]) if "phase" in trace else 0
+            learned_state.touch(vpn, float(delta), float(is_write), float(ts), float(phase), index)
 
         if vpn in resident:
             if policy == "lru":
@@ -110,7 +114,7 @@ def simulate_policy(trace: Dict[str, np.ndarray], frames: int, policy: str, work
             latency += SWAP_READ_LATENCY_NS
 
         if len(resident) >= frames:
-            victim = select_victim(policy, resident, lru, clock, future_positions)
+            victim = select_victim(policy, resident, lru, clock, learned_state, index)
             resident.remove(victim)
             if victim in dirty:
                 dirty.remove(victim)
@@ -148,7 +152,8 @@ def select_victim(
     resident: set,
     lru: OrderedDict,
     clock: ClockState,
-    future_positions: Optional[Dict[int, deque]],
+    learned_state: Optional["LearnedRuntimeState"],
+    index: int,
 ) -> int:
     if policy == "lru":
         victim = next(iter(lru))
@@ -157,30 +162,38 @@ def select_victim(
     if policy == "clock":
         return clock.evict()
     if policy == "learned":
-        return reuse_hint_victim(resident, future_positions)
+        if learned_state is None:
+            return next(iter(resident))
+        return learned_state.choose_victim(resident, index)
     raise ValueError(f"unknown policy: {policy}")
 
 
-def build_future_positions(vpns: np.ndarray) -> Dict[int, deque]:
-    positions = defaultdict(deque)
-    for index, raw_vpn in enumerate(vpns):
-        positions[int(raw_vpn)].append(index)
-    return positions
+class LearnedRuntimeState:
+    def __init__(self):
+        import swapcore_native as scn
 
+        self.predictor = scn.RuntimeGRU()
+        self.history = deque(maxlen=32)
+        self.predicted_reuse: Dict[int, float] = defaultdict(float)
+        self.frequency: Dict[int, int] = defaultdict(int)
+        self.last_access: Dict[int, int] = defaultdict(int)
 
-def reuse_hint_victim(resident: Iterable[int], future_positions: Optional[Dict[int, deque]]) -> int:
-    """Deterministic learned-policy placeholder using trace reuse hints.
+    def touch(self, vpn: int, delta: float, access: float, ts: float, phase: float, index: int):
+        self.history.append((float(vpn), delta, access, ts, phase))
+        padded = [(0.0, 0.0, 0.0, 0.0, 0.0)] * (32 - len(self.history)) + list(self.history)
+        flat = [value for row in padded for value in row]
+        self.predicted_reuse[vpn] = float(self.predictor.predictSequence(flat, 32))
+        self.frequency[vpn] += 1
+        self.last_access[vpn] = index
 
-    Runtime GRU integration can replace this scorer with exported-model inference.
-    For trace-generation work, it gives a stable upper-bound-ish policy that
-    prefers evicting pages with no near reuse.
-    """
-    if future_positions is None:
-        return next(iter(resident))
-    return max(
-        resident,
-        key=lambda page: future_positions[page][0] if future_positions[page] else 1_000_000_000_000,
-    )
+    def choose_victim(self, resident: Iterable[int], index: int) -> int:
+        def score(page: int) -> float:
+            recency = float(index - self.last_access.get(page, 0))
+            frequency = float(self.frequency.get(page, 0))
+            ml_score = self.predicted_reuse.get(page, 0.0)
+            return 0.45 * recency + 0.25 * (1.0 / (1.0 + frequency)) + 0.30 * (1.0 - ml_score)
+
+        return max(resident, key=score)
 
 
 def generate_workload(name: str, accesses: int, num_pages: int, seed: int) -> Dict[str, np.ndarray]:
@@ -190,6 +203,8 @@ def generate_workload(name: str, accesses: int, num_pages: int, seed: int) -> Di
 def run_benchmark(args) -> List[BenchmarkMetrics]:
     if args.trace:
         trace = load_trace_npz(args.trace)
+        if args.max_accesses is not None:
+            trace = {key: value[:args.max_accesses] for key, value in trace.items()}
         traces = {Path(args.trace).stem: trace}
     elif args.suite:
         if args.accesses == DEFAULT_BENCH_ACCESSES:
@@ -250,10 +265,11 @@ def print_results(results: List[BenchmarkMetrics]):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate traces and benchmark SwapCore eviction policies.")
-    parser.add_argument("--workload", choices=["sequential", "random", "zipfian", "mixed"], default="mixed")
+    parser.add_argument("--workload", choices=["sequential", "random", "loop", "zipfian", "mixed"], default="mixed")
     parser.add_argument("--trace", help="Replay an existing .npz trace.")
     parser.add_argument("--suite", action="store_true", help="Run the full deterministic workload suite.")
     parser.add_argument("--accesses", type=int, default=DEFAULT_BENCH_ACCESSES)
+    parser.add_argument("--max-accesses", type=int, help="Limit replayed trace length for quick validation runs.")
     parser.add_argument("--num-pages", type=int, default=65536)
     parser.add_argument("--frames", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=0)

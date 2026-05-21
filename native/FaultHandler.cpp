@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <cstring>
 #include <cassert>
 #include <iostream>
@@ -16,7 +17,7 @@ FaultHandler::FaultHandler(MemoryManager* mgr)
     , manager(mgr)
     , regionBase(nullptr)
     , regionSize(0){
-    uffd = userfaultfd(0);
+    uffd = static_cast<int>(syscall(__NR_userfaultfd, 0));
     if (uffd == -1){
         std::cerr << "Failed to create userfaultfd" << std::endl;
         exit(1);

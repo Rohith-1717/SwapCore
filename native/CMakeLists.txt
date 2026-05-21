@@ -13,7 +13,7 @@ pybind11_add_module(swapcore_native
     MemoryManager.cpp
     SwapManager.cpp
     EvictionManager.cpp
-    RuntimeGRU.cpp
+    runtime_gru.cpp
     Bindings.cpp
 )
 

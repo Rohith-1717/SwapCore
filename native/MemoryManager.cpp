@@ -14,6 +14,7 @@ MemoryManager::MemoryManager(EvictionPolicy policy, bool learned)
       learnedFrequencyWeight(0.25f),
       learnedPredictionWeight(0.30f),
       accessCounter(0),
+      learnedEvictions(0),
       faultNs(0),
       swapWriteNs(0),
       swapReadNs(0){
@@ -82,13 +83,26 @@ void MemoryManager::touchPage(u64 vpn){
     entry.previousAccess = entry.lastAccess;
     entry.lastAccess = ++accessCounter;
     entry.frequency += 1;
-    entry.predictedReuse = learnedPredictor.predict(
+    std::array<float, RuntimeGRU::INPUT_SIZE> features = {
         float(vpn),
         float(entry.lastAccess - entry.previousAccess),
         entry.dirty ? 1.0f : 0.0f,
         float(entry.lastAccess),
-        float(entry.lastAccess - entry.previousAccess)
-    );
+        0.0f
+    };
+    gruHistory.push_back(features);
+    while (gruHistory.size() > 32){
+        gruHistory.pop_front();
+    }
+
+    std::vector<float> sequence(32 * RuntimeGRU::INPUT_SIZE, 0.0f);
+    size_t offset = 32 - gruHistory.size();
+    for (size_t i = 0; i < gruHistory.size(); ++i){
+        for (size_t j = 0; j < RuntimeGRU::INPUT_SIZE; ++j){
+            sequence[(offset + i) * RuntimeGRU::INPUT_SIZE + j] = gruHistory[i][j];
+        }
+    }
+    entry.predictedReuse = learnedPredictor.predictSequence(sequence, 32);
     eviction.touch(vpn, entry, accessCounter);
 }
 
@@ -129,7 +143,7 @@ float MemoryManager::computeLearnedScore(const PageMeta& entry, u64 vpn) const{
 
 u64 MemoryManager::chooseLearnedVictim(){
     u64 victim_vpn = SWAP_SLOT_INVALID;
-    float best_score = std::numeric_limits<float>::infinity();
+    float best_score = -std::numeric_limits<float>::infinity();
     size_t num_pages = pageTbl_.size();
     for (u64 vpn = 0; vpn < num_pages; ++vpn){
         const auto& entry = pageTbl_.getEntry(vpn);
@@ -137,7 +151,7 @@ u64 MemoryManager::chooseLearnedVictim(){
             continue;
         }
         float score = computeLearnedScore(entry, vpn);
-        if (score < best_score){
+        if (score > best_score){
             best_score = score;
             victim_vpn = vpn;
         }
@@ -145,6 +159,7 @@ u64 MemoryManager::chooseLearnedVictim(){
     if (victim_vpn == SWAP_SLOT_INVALID){
         return eviction.choose_victim(pageTbl_);
     }
+    learnedEvictions += 1;
     return victim_vpn;
 }
 
@@ -154,4 +169,12 @@ uint64_t MemoryManager::swapWriteLatencyNs() const {
 
 uint64_t MemoryManager::swapReadLatencyNs() const {
     return swapReadNs;
+}
+
+uint64_t MemoryManager::learnedEvictionCount() const {
+    return learnedEvictions;
+}
+
+bool MemoryManager::learnedEvictionActive() const {
+    return learnedEvictionEnabled;
 }

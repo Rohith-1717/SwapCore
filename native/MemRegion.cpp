@@ -3,7 +3,7 @@
 #include <cassert>
 #include <iostream>
 
-MemRegion::MemRegion(size_t size, FaultHandler* handler) : size(size), handler(handler), manager(handler->get_manager()){
+MemRegion::MemRegion(size_t size, FaultHandler* handler) : size(size), handler(handler), manager(handler->getManager()){
     addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (addr == MAP_FAILED){
         std::cerr << "Failed to mmap region" << std::endl;
